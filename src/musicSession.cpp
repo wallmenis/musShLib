@@ -7,7 +7,8 @@
 
 MusicSession::MusicSession()
 {
-    sessionId = generateId();
+    generator.seed(rd());
+    sessionId = generateId(5);
     session=
         {
             {"playState", MusicSession::playState::PAUSED},
@@ -20,6 +21,11 @@ MusicSession::MusicSession()
     playlist.clear();
 }
 
+int MusicSession::addIceServer(std::string iceServer)
+{
+    config.iceServers.emplace_back(iceServer);
+    return 0;
+}
 int MusicSession::connectToSignalingServer(std::string signalingServer)
 {
     return 0;
@@ -51,8 +57,19 @@ std::vector<nlohmann::json> MusicSession::getPlaylist()
     return playlistTmp;
 }
 
-std::string MusicSession::generateId()
+std::string MusicSession::generateId(int len)
 {
-    std::hash<int> hash;
-    return "";
+    std::string map ="ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+    std::stringstream strm;
+    strm.clear();
+    for (int i = 0; i < len; i++)
+    {
+        strm << map[generator()%26];
+    }
+    return strm.str();
+}
+
+MusicSession::~MusicSession()
+{
+
 }

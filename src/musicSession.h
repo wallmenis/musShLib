@@ -16,11 +16,13 @@
 #include <unordered_map>
 #include <nlohmann/json.hpp>
 #include <atomic>
+#include <random>
 
 
 class MusicSession{
 public:
     MusicSession();
+    int addIceServer(std::string iceServer);
     int connectToSignalingServer(std::string signalingServer);
     int connectToPeer(std::string peerId);
     std::string getSessionId();
@@ -40,8 +42,11 @@ private:
     std::mutex sessionMutex;
     nlohmann::json session;
     std::vector<nlohmann::json> playlist;
+    std::random_device rd;
+    std::mt19937 generator;
+    rtc::Configuration config;
 
-    std::string generateId();
+    std::string generateId(int len);
 };
 
 #endif
