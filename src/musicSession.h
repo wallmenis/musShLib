@@ -37,6 +37,10 @@ public:
 
     ~MusicSession();
 private:
+    std::shared_ptr<rtc::WebSocket> ws;
+    std::unordered_map<std::string,std::shared_ptr<rtc::DataChannel>> dcs;
+    std::unordered_map<std::string,std::shared_ptr<rtc::PeerConnection>> pcs;
+
     std::string sessionId;
     std::mutex playListMutex;
     std::mutex sessionMutex;
@@ -47,6 +51,9 @@ private:
     rtc::Configuration config;
 
     std::string generateId(int len);
+
+    void handleSignallingServer(rtc::message_variant data);
+    int interperate(std::string,std::shared_ptr<rtc::DataChannel>);
 };
 
 #endif

@@ -28,10 +28,57 @@ int MusicSession::addIceServer(std::string iceServer)
 }
 int MusicSession::connectToSignalingServer(std::string signalingServer)
 {
+    std::stringstream tmp;
+    std::string url;
+    ws = std::make_shared<rtc::WebSocket>();
+    ws->onMessage([this](rtc::message_variant dat){
+        handleSignallingServer(dat);
+    });
+    tmp << signalingServer << "/" << sessionId;
+    url = tmp.str();
+    ws->open(url);
+
     return 0;
 }
 int MusicSession::connectToPeer(std::string peerId)
 {
+
+    if(!ws->isOpen())
+    {
+        std::cerr << "Hasn't connected to signalling server yet. Waiting\n";
+    }
+    while(!ws->isOpen());
+
+    auto pc = pcs[peerId] = std::make_shared<rtc::PeerConnection>();
+    pc->onLocalDescription([this, peerId](rtc::Description desc){
+        nlohmann::json msg = {
+            {"id",        peerId},
+            {"type",      desc.typeString()},
+            {"description", std::string(desc)}
+        };
+        ws->send(msg.dump());
+    });
+
+    pc->onLocalCandidate([this, peerId](rtc::Candidate candid){
+        nlohmann::json msg = {
+            {"id",        peerId},
+            {"type",      "candidate"},
+            {"candidate", std::string(candid)},
+            {"mid",       candid.mid()}
+        };
+        ws->send(msg.dump());
+    });
+
+    auto dc = dcs[peerId] = pc->createDataChannel("music");
+
+    pc->onGatheringStateChange([](rtc::PeerConnection::GatheringState state){
+        std::cout << "gathering state: " << state << std::endl;
+    });
+
+    pc->onStateChange([](rtc::PeerConnection::State state){
+        std::cout << "state: " << state << std::endl;
+    });
+
     return 0;
 }
 std::string MusicSession::getSessionId()
@@ -40,6 +87,11 @@ std::string MusicSession::getSessionId()
 }
 int MusicSession::forcePullSessionAndPlaylist()
 {
+    for (auto i : dcs)
+    {
+        while(!i.second->isOpen());
+        i.second->send("test");
+    }
     return 0;
 }
 nlohmann::json MusicSession::getPeerSession()
@@ -56,7 +108,7 @@ std::vector<nlohmann::json> MusicSession::getPlaylist()
     playListMutex.unlock();
     return playlistTmp;
 }
-
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 std::string MusicSession::generateId(int len)
 {
     std::string map ="ABCDEFGHIJKLMNOPQRSTUVWXYZ";
@@ -68,8 +120,96 @@ std::string MusicSession::generateId(int len)
     }
     return strm.str();
 }
+void MusicSession::handleSignallingServer(rtc::message_variant data)
+{
+    if (!std::holds_alternative<std::string>(data))
+    {
+        std::cerr << "Signaling server returned non string value, ignoring\n";
+        return;
+    }
+    nlohmann::json dat = nlohmann::json::parse(std::get<std::string>(data));
+    std::cout << dat.dump(1);
+    auto test_id = dat.find("id");
+    std::string id = "";
+    auto test_type = dat.find("type");
+    std::string type = "";
+    if (test_id==dat.end())
+    {
+        return;
+    }
+    id=test_id->get<std::string>();
+    std::shared_ptr<rtc::PeerConnection> pc;
+    if (pcs.find(id) == pcs.end())
+        pc = pcs[id] = std::make_shared<rtc::PeerConnection>(config); // create if not existant yet
+    else
+        pc = pcs[id];
+    pc->onLocalDescription([this, id](rtc::Description desc){
+        nlohmann::json msg = {
+            {"id",        id},
+            {"type",      desc.typeString()},
+            {"description", std::string(desc)}
+        };
+        ws->send(msg.dump());
+    });
 
-MusicSession::~MusicSession()
+    pc->onLocalCandidate([this, id](rtc::Candidate candid){
+        nlohmann::json msg = {
+            {"id",        id},
+            {"type",      "candidate"},
+            {"candidate", std::string(candid)},
+            {"mid",       candid.mid()}
+        };
+        ws->send(msg.dump());
+    });
+    pc->onGatheringStateChange([](rtc::PeerConnection::GatheringState state){
+        std::cout << "gathering state: " << state << std::endl;
+    });
+    pc->onStateChange([](rtc::PeerConnection::State state){
+        std::cout << "state: " << state << std::endl;
+    });
+    if(test_type==dat.end())
+    {
+        return;
+    }
+
+    type = test_type->get<std::string>();
+
+    std::cout << "added " << type << std::endl;
+    if (type == "answer" || type == "offer") {                  // whether offerer or answerer
+        std::string sdp = dat["description"].get<std::string>();
+        pc->setRemoteDescription(rtc::Description(sdp, type));
+    }
+    if (type == "candidate") {
+        std::string candid = dat["candidate"].get<std::string>();
+        pc->addRemoteCandidate(rtc::Candidate(candid));
+    }
+
+
+
+    pc->onDataChannel([this,id](std::shared_ptr<rtc::DataChannel> dc){
+        std::cout << "datachannel made!!!!!!!!!!!!!!!!!!!!" << std::endl;
+        dcs[id] = dc;
+        dc->onMessage([this,dc](rtc::message_variant msg){
+            if(std::holds_alternative<std::string>(msg))
+            {
+                std::cout << std::get<std::string>(msg) << std::endl;
+                if( interperate(std::get<std::string>(msg),dc))
+                {
+                    std::cerr << "failed to interperate\n";
+                }
+            }
+        });
+    });
+
+}
+int MusicSession::interperate(std::string message, std::shared_ptr<rtc::DataChannel> dc)
 {
 
+    return 0;
+}
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+MusicSession::~MusicSession()
+{
+    dcs.clear();
+    pcs.clear();
 }
