@@ -45,9 +45,9 @@ int MusicSession::connectToPeer(std::string peerId)
 
     if(!ws->isOpen())
     {
-        std::cerr << "Hasn't connected to signalling server yet. Waiting\n";
+        std::cerr << "Hasn't connected to signalling server yet. Try again later.\n";
+        return 1;
     }
-    while(!ws->isOpen());
 
     auto pc = pcs[peerId] = std::make_shared<rtc::PeerConnection>(config);
     pc->onLocalDescription([this, peerId](rtc::Description desc){
@@ -63,8 +63,8 @@ int MusicSession::connectToPeer(std::string peerId)
         nlohmann::json msg = {
             {"id",        peerId},
             {"type",      "candidate"},
-            {"candidate", std::string(candid)},
-            {"mid",       candid.mid()}
+            {"candidate", std::string(candid)}//,
+            //{"mid",       candid.mid()}           //commented out because we just use datachannels for now
         };
         ws->send(msg.dump());
     });
@@ -120,6 +120,19 @@ std::vector<nlohmann::json> MusicSession::getPlaylist()
     auto playlistTmp = playlist;
     playListMutex.unlock();
     return playlistTmp;
+}
+std::string MusicSession::getPlaylistHash()
+{
+    auto plist = getPlaylist();
+    std::hash<std::string> hasher;
+    std::string hash = "";
+    std::stringstream strm;
+    for (auto i : plist)
+    {
+        strm << i.dump();
+    }
+    hash = std::to_string(hasher(strm.str()));
+    return hash;
 }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 std::string MusicSession::generateId(int len)
@@ -191,13 +204,11 @@ void MusicSession::handleSignallingServer(rtc::message_variant data)
     pc->onDataChannel([this,id](std::shared_ptr<rtc::DataChannel> dc){
         //std::cout << "datachannel made!!!!!!!!!!!!!!!!!!!!" << std::endl;
         dcs[id] = dc;
-        dc->onMessage([this,dc](rtc::message_variant msg){
-            if(std::holds_alternative<std::string>(msg))
+        dc->onMessage([this,dc](rtc::message_variant msg){  // heard this may cause a memory leak. I understand why but I don't really feel like fixing it yet.
+            if(std::holds_alternative<std::string>(msg))    // May use dcs[id] inside instead and pass the ID. I find it cleaner that way instead of weak pointers.
             {
                 std::cout << std::get<std::string>(msg) << std::endl;
 
-                //while(!dc->isOpen());
-                //dc->send("test");
                 if( interperate(std::get<std::string>(msg),dc))
                 {
                     std::cerr << "failed to interperate\n";
@@ -250,6 +261,32 @@ int MusicSession::interperate(std::string message, std::shared_ptr<rtc::DataChan
     return 0;
 }
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+/*int MusicSession::cleanUpConnections() //I just want the idea to be there for a bit.
+{
+    int c = 0;
+    int i = 0;
+    for (dcs.count())
+    {
+        if(i.second->isClosed())
+        {
+            c+=dcs.erase(i.first);
+        }
+    }
+    for (auto i : pcs)
+    {
+        i.second->onStateChange([i,this](rtc::PeerConnection::State state){
+            if(
+                state == rtc::PeerConnection::State::Closed ||
+                state == rtc::PeerConnection::State::Disconnected ||
+                state == rtc::PeerConnection::State::Failed
+                )
+            {
+                pcs.erase(i.first);
+            }
+        });
+    }
+    return c;
+}*/
 MusicSession::~MusicSession()
 {
     for (auto i : dcs)

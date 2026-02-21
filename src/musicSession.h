@@ -29,6 +29,7 @@ public:
     int forcePullSessionAndPlaylist();
     nlohmann::json getPeerSession();
     std::vector<nlohmann::json> getPlaylist();
+    std::string getPlaylistHash();
 
     enum playState{
         PLAYING,
@@ -54,6 +55,7 @@ private:
 
     void handleSignallingServer(rtc::message_variant data);
     int interperate(std::string,std::shared_ptr<rtc::DataChannel>);
+    //int cleanUpConnections();
 };
 
 #endif
