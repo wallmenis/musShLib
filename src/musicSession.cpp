@@ -48,8 +48,9 @@ int MusicSession::connectToPeer(std::string peerId)
         std::cerr << "Hasn't connected to signalling server yet. Try again later.\n";
         return 1;
     }
-
+    pcsMutex.lock();
     auto pc = pcs[peerId] = std::make_shared<rtc::PeerConnection>(config);
+    pcsMutex.unlock();
     pc->onLocalDescription([this, peerId](rtc::Description desc){
         nlohmann::json msg = {
             {"id",        peerId},
@@ -69,13 +70,15 @@ int MusicSession::connectToPeer(std::string peerId)
         ws->send(msg.dump());
     });
 
+    dcsMutex.lock();
     auto dc = dcs[peerId] = pc->createDataChannel("music");
+    dcsMutex.unlock();
 
-    dc->onMessage([this,dc](rtc::message_variant msg){
+    dc->onMessage([this,peerId](rtc::message_variant msg){
         if(std::holds_alternative<std::string>(msg))
         {
             std::cout << std::get<std::string>(msg) << std::endl;
-            if( interperate(std::get<std::string>(msg),dc))
+            if( interpret(std::get<std::string>(msg),peerId))
             {
                 std::cerr << "failed to interperate\n";
             }
@@ -153,6 +156,11 @@ void MusicSession::handleSignallingServer(rtc::message_variant data)
         std::cerr << "Signaling server returned non string value, ignoring\n";
         return;
     }
+    if(!nlohmann::json::accept(std::get<std::string>(data)))
+    {
+        std::cerr << "Signalling server returned bad text, ignoring\n";
+        return;
+    }
     nlohmann::json dat = nlohmann::json::parse(std::get<std::string>(data));
     std::cout << dat.dump(1);
     auto test_id = dat.find("id");
@@ -171,7 +179,9 @@ void MusicSession::handleSignallingServer(rtc::message_variant data)
     std::shared_ptr<rtc::PeerConnection> pc;
     if (pcs.find(id) == pcs.end())
     {
+        pcsMutex.lock();
         pc = pcs[id] = std::make_shared<rtc::PeerConnection>(config); // create if not existant yet
+        pcsMutex.unlock();
         pc->onLocalDescription([this, id](rtc::Description desc){
             nlohmann::json msg = {
                 {"id",        id},
@@ -192,7 +202,11 @@ void MusicSession::handleSignallingServer(rtc::message_variant data)
         });
     }
     else
+    {
+        pcsMutex.lock();
         pc = pcs[id];
+        pcsMutex.unlock();
+    }
 
     pc->onGatheringStateChange([](rtc::PeerConnection::GatheringState state){
         std::cout << "gathering state: " << state << std::endl;
@@ -203,13 +217,15 @@ void MusicSession::handleSignallingServer(rtc::message_variant data)
 
     pc->onDataChannel([this,id](std::shared_ptr<rtc::DataChannel> dc){
         //std::cout << "datachannel made!!!!!!!!!!!!!!!!!!!!" << std::endl;
+        dcsMutex.lock();
         dcs[id] = dc;
-        dc->onMessage([this,dc](rtc::message_variant msg){  // heard this may cause a memory leak. I understand why but I don't really feel like fixing it yet.
+        dcsMutex.unlock();
+        dc->onMessage([this,id](rtc::message_variant msg){  // heard this may cause a memory leak. I understand why but I don't really feel like fixing it yet.
             if(std::holds_alternative<std::string>(msg))    // May use dcs[id] inside instead and pass the ID. I find it cleaner that way instead of weak pointers.
             {
                 std::cout << std::get<std::string>(msg) << std::endl;
 
-                if( interperate(std::get<std::string>(msg),dc))
+                if( interpret(std::get<std::string>(msg),id))
                 {
                     std::cerr << "failed to interperate\n";
                 }
@@ -241,8 +257,11 @@ void MusicSession::handleSignallingServer(rtc::message_variant data)
     }
 }
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-int MusicSession::interperate(std::string message, std::shared_ptr<rtc::DataChannel> dc)
+int MusicSession::interpret(std::string message, std::string id)
 {
+    dcsMutex.lock();
+    auto dc = dcs[id];
+    dcsMutex.unlock();
     if (!dc->isOpen())
     {
         return 1;

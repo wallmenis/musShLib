@@ -45,6 +45,8 @@ private:
     std::string sessionId;
     std::mutex playListMutex;
     std::mutex sessionMutex;
+    std::mutex dcsMutex;
+    std::mutex pcsMutex;
     nlohmann::json session;
     std::vector<nlohmann::json> playlist;
     std::random_device rd;
@@ -54,7 +56,7 @@ private:
     std::string generateId(int len);
 
     void handleSignallingServer(rtc::message_variant data);
-    int interperate(std::string,std::shared_ptr<rtc::DataChannel>);
+    int interpret(std::string,std::string);
     //int cleanUpConnections();
 };
 
