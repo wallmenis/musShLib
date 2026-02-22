@@ -6,7 +6,6 @@
 
 #include "rtc/rtc.hpp"
 
-#include <nlohmann/json_fwd.hpp>
 #include <chrono>
 #include <future>
 #include <iostream>
@@ -32,6 +31,10 @@ public:
     int getPlaylistHash();
     int addTrack(nlohmann::json track);
     int setSession(nlohmann::json sesh);
+    int assertState(nlohmann::json msg);
+    int getNumberOfConnections();
+    bool isConnectedToSignallingServer();
+    bool isSafeToSend();
 
     enum playState{
         PLAYING,
@@ -55,6 +58,8 @@ private:
     std::mt19937 generator;
     rtc::Configuration config;
     std::atomic<bool> playlistInWriteMode;
+    std::atomic<int> connections;
+    std::atomic<bool> wsConnected;
 
     enum messageType
     {
@@ -72,6 +77,8 @@ private:
     int interpret(std::string,std::string);
 
     messageType identify(nlohmann::json msg);
+    bool onTime(nlohmann::json msg, int timeDifference);
+
 
     static bool getIfFieldIsInteger(nlohmann::json msg, std::string field);
     static bool getIfFieldIsString(nlohmann::json msg, std::string field);

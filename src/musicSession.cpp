@@ -7,6 +7,8 @@
 
 MusicSession::MusicSession()
 {
+    wsConnected = false;
+    connections = 0;
     generator.seed(rd());
     sessionId = generateId(5);
     playlistInWriteMode = false;
@@ -32,6 +34,8 @@ int MusicSession::connectToSignalingServer(std::string signalingServer)
     std::stringstream tmp;
     std::string url;
     ws = std::make_shared<rtc::WebSocket>();
+    ws->onOpen([this](){wsConnected=true;});
+    ws->onClosed([this](){wsConnected=false;});
     ws->onMessage([this](rtc::message_variant dat){
         handleSignallingServer(dat);
     });
@@ -44,7 +48,7 @@ int MusicSession::connectToSignalingServer(std::string signalingServer)
 int MusicSession::connectToPeer(std::string peerId)
 {
 
-    if(!ws->isOpen())
+    if(!wsConnected)
     {
         std::cerr << "Hasn't connected to signalling server yet. Try again later.\n";
         return 1;
@@ -71,10 +75,12 @@ int MusicSession::connectToPeer(std::string peerId)
         ws->send(msg.dump());
     });
 
+
     dcsMutex.lock();
     auto dc = dcs[peerId] = pc->createDataChannel("music");
     dcsMutex.unlock();
-
+    dc->onOpen([this](){connections++;});
+    dc->onClosed([this](){connections--;});
     dc->onMessage([this,peerId](rtc::message_variant msg){
         if(std::holds_alternative<std::string>(msg))
         {
@@ -102,11 +108,12 @@ std::string MusicSession::getSessionId()
 }
 int MusicSession::forcePullSessionAndPlaylist()
 {
+    nlohmann::json msg = {{"askSync", getSessionId()}};
     std::lock_guard<std::mutex>mtxdc(dcsMutex);
     for (auto i : dcs)
     {
         if(i.second->isOpen())
-            i.second->send("test");
+            i.second->send(msg.dump());
         else
             return 1;
     }
@@ -136,7 +143,7 @@ int MusicSession::getPlaylistHash()
     {
         strm << i.dump();
     }
-    hash = hasher(strm.str());
+    hash = hasher(strm.str())%0x7FFFFFFF;
     return hash;
 }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -202,6 +209,13 @@ void MusicSession::handleSignallingServer(rtc::message_variant data)
             };
             ws->send(msg.dump());
         });
+
+        pc->onGatheringStateChange([](rtc::PeerConnection::GatheringState state){
+            std::cout << "gathering state: " << state << std::endl;
+        });
+        pc->onStateChange([](rtc::PeerConnection::State state){
+            std::cout << "state: " << state << std::endl;
+        });
     }
     else
     {
@@ -209,18 +223,15 @@ void MusicSession::handleSignallingServer(rtc::message_variant data)
         pcsMutex.unlock();
     }
 
-    pc->onGatheringStateChange([](rtc::PeerConnection::GatheringState state){
-        std::cout << "gathering state: " << state << std::endl;
-    });
-    pc->onStateChange([](rtc::PeerConnection::State state){
-        std::cout << "state: " << state << std::endl;
-    });
+
 
     pc->onDataChannel([this,id](std::shared_ptr<rtc::DataChannel> dc){
         //std::cout << "datachannel made!!!!!!!!!!!!!!!!!!!!" << std::endl;
         dcsMutex.lock();
         dcs[id] = dc;
         dcsMutex.unlock();
+        dc->onOpen([this](){connections++;});
+        dc->onClosed([this](){connections--;});
         dc->onMessage([this,id](rtc::message_variant msg){
             if(std::holds_alternative<std::string>(msg))    // May use dcs[id] inside instead and pass the ID. I find it cleaner that way instead of weak pointers.
             {
@@ -269,10 +280,50 @@ int MusicSession::setSession(nlohmann::json sesh)
     session = sesh;
     return 0;
 }
+bool MusicSession::onTime(nlohmann::json msg, int timeDifference)
+{
+    nlohmann::json sesh = getPeerSession();
+    if (sesh["priority"] != msg["priority"])
+        return false;
+    if (sesh["playlistPos"] != msg["playlistPos"])
+        return false;
+    if (sesh["numberOfSongs"] != msg["numberOfSongs"])
+        return false;
+    if (sesh["playlistChkSum"] != msg["playlistChkSum"])
+        return false;
+    if (sesh["playState"] != msg["playState"])
+        return false;
+    if (std::abs(msg["timeStamp"].get<int>() - sesh["timeStamp"].get<int>() ) >timeDifference)
+        return false;
+    return true;
+}
+int MusicSession::assertState(nlohmann::json msg)
+{
+    auto toSend = msg;
+    toSend["priority"] = getSessionId();
+    std::lock_guard<std::mutex> mtxdc(dcsMutex);
+    for (auto i : dcs)
+    {
+        i.second->send(toSend.dump());
+    }
+    return 0;
+}
+int MusicSession::getNumberOfConnections()
+{
+    return connections;
+}
+bool MusicSession::isConnectedToSignallingServer()
+{
+    return wsConnected;
+}
+bool MusicSession::isSafeToSend()
+{
+    return getNumberOfConnections() > 0 && isConnectedToSignallingServer();
+}
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 int MusicSession::interpret(std::string message, std::string id)
 {
-    dcsMutex.lock();                    // Noticed here there is double locking of mutex. Still better than weak pointers. XD
+    dcsMutex.lock();
     auto test_dc = dcs.find(id);
     if (test_dc == dcs.end())
     {
@@ -304,7 +355,7 @@ int MusicSession::interpret(std::string message, std::string id)
         auto sesh = getPeerSession();
         if(msg["priority"]==getSessionId())
             dc->send(sesh.dump());
-        else
+        else if(!onTime(msg,10))
             setSession(msg);
         if (phash != msg["playlistChkSum"] || pnum != msg["numberOfSongs"])
         {
