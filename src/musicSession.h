@@ -29,7 +29,9 @@ public:
     int forcePullSessionAndPlaylist();
     nlohmann::json getPeerSession();
     std::vector<nlohmann::json> getPlaylist();
-    std::string getPlaylistHash();
+    int getPlaylistHash();
+    int addTrack(nlohmann::json track);
+    int setSession(nlohmann::json sesh);
 
     enum playState{
         PLAYING,
@@ -52,11 +54,28 @@ private:
     std::random_device rd;
     std::mt19937 generator;
     rtc::Configuration config;
+    std::atomic<bool> playlistInWriteMode;
+
+    enum messageType
+    {
+        SESSION,
+        TRACK,
+        OK,
+        ASKSYNC,
+        ASKPLAYLIST,
+        INVALID
+    };
 
     std::string generateId(int len);
 
     void handleSignallingServer(rtc::message_variant data);
     int interpret(std::string,std::string);
+
+    messageType identify(nlohmann::json msg);
+
+    static bool getIfFieldIsInteger(nlohmann::json msg, std::string field);
+    static bool getIfFieldIsString(nlohmann::json msg, std::string field);
+
     //int cleanUpConnections();
 };
 

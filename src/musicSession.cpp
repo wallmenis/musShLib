@@ -9,6 +9,7 @@ MusicSession::MusicSession()
 {
     generator.seed(rd());
     sessionId = generateId(5);
+    playlistInWriteMode = false;
     session=
         {
             {"playState", MusicSession::playState::PAUSED},
@@ -101,6 +102,7 @@ std::string MusicSession::getSessionId()
 }
 int MusicSession::forcePullSessionAndPlaylist()
 {
+    std::lock_guard<std::mutex>mtxdc(dcsMutex);
     for (auto i : dcs)
     {
         if(i.second->isOpen())
@@ -124,17 +126,17 @@ std::vector<nlohmann::json> MusicSession::getPlaylist()
     playListMutex.unlock();
     return playlistTmp;
 }
-std::string MusicSession::getPlaylistHash()
+int MusicSession::getPlaylistHash()
 {
     auto plist = getPlaylist();
     std::hash<std::string> hasher;
-    std::string hash = "";
+    int hash = 0;
     std::stringstream strm;
     for (auto i : plist)
     {
         strm << i.dump();
     }
-    hash = std::to_string(hasher(strm.str()));
+    hash = hasher(strm.str());
     return hash;
 }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -177,9 +179,9 @@ void MusicSession::handleSignallingServer(rtc::message_variant data)
     }
     id=test_id->get<std::string>();
     std::shared_ptr<rtc::PeerConnection> pc;
+    pcsMutex.lock();
     if (pcs.find(id) == pcs.end())
     {
-        pcsMutex.lock();
         pc = pcs[id] = std::make_shared<rtc::PeerConnection>(config); // create if not existant yet
         pcsMutex.unlock();
         pc->onLocalDescription([this, id](rtc::Description desc){
@@ -203,7 +205,6 @@ void MusicSession::handleSignallingServer(rtc::message_variant data)
     }
     else
     {
-        pcsMutex.lock();
         pc = pcs[id];
         pcsMutex.unlock();
     }
@@ -220,7 +221,7 @@ void MusicSession::handleSignallingServer(rtc::message_variant data)
         dcsMutex.lock();
         dcs[id] = dc;
         dcsMutex.unlock();
-        dc->onMessage([this,id](rtc::message_variant msg){  // heard this may cause a memory leak. I understand why but I don't really feel like fixing it yet.
+        dc->onMessage([this,id](rtc::message_variant msg){
             if(std::holds_alternative<std::string>(msg))    // May use dcs[id] inside instead and pass the ID. I find it cleaner that way instead of weak pointers.
             {
                 std::cout << std::get<std::string>(msg) << std::endl;
@@ -256,14 +257,34 @@ void MusicSession::handleSignallingServer(rtc::message_variant data)
         }
     }
 }
+int MusicSession::addTrack(nlohmann::json track)
+{
+    std::lock_guard<std::mutex> mtxpl(playListMutex);
+    playlist.emplace_back(track);
+    return 0;
+}
+int MusicSession::setSession(nlohmann::json sesh)
+{
+    std::lock_guard<std::mutex> mtxsc(sessionMutex);
+    session = sesh;
+    return 0;
+}
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 int MusicSession::interpret(std::string message, std::string id)
 {
-    dcsMutex.lock();
-    auto dc = dcs[id];
+    dcsMutex.lock();                    // Noticed here there is double locking of mutex. Still better than weak pointers. XD
+    auto test_dc = dcs.find(id);
+    if (test_dc == dcs.end())
+    {
+        dcsMutex.unlock();
+        std::cerr << "Invalid id: "<< id <<" ignoring\n";
+        return 1;
+    }
+    auto dc = test_dc->second;
     dcsMutex.unlock();
     if (!dc->isOpen())
     {
+        std::cerr << "Datachannel not open yet, ignoring\n";
         return 1;
     }
 
@@ -275,11 +296,98 @@ int MusicSession::interpret(std::string message, std::string id)
 
     auto msg = nlohmann::json::parse(message);
 
+    MusicSession::messageType type = identify(msg);
+    int phash = getPlaylistHash();
+    int pnum = getPlaylist().size();
+    if(type == messageType::SESSION)
+    {
+        auto sesh = getPeerSession();
+        if(msg["priority"]==getSessionId())
+            dc->send(sesh.dump());
+        else
+            setSession(msg);
+        if (phash != msg["playlistChkSum"] || pnum != msg["numberOfSongs"])
+        {
+            nlohmann::json toSend = {{"sendPlaylist", phash}};
+            dc->send(toSend.dump());
+            playlistInWriteMode = true;
+        }
+        return 0;
+    }
 
+    if(type == messageType::ASKPLAYLIST)
+    {
+        auto pl = getPlaylist();
+        for (auto i : pl)
+        {
+            dc->send(i.dump());
+        }
+        return 0;
+    }
 
-    return 0;
+    if(type == messageType::ASKSYNC)
+    {
+        auto sesh = getPeerSession();
+        dc->send(sesh.dump());
+        return 0;
+    }
+
+    if(type == messageType::OK)
+    {
+        nlohmann::json toSend = {{"sendPlaylist", phash}};
+        if (msg["ok"] == phash)
+            playlistInWriteMode = false;
+        else
+            dc->send(toSend.dump());
+        return 0;
+    }
+
+    if(type == messageType::TRACK && playlistInWriteMode)
+    {
+        addTrack(msg);
+        return 0;
+    }
+
+    return 1;
 }
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+MusicSession::messageType MusicSession::identify(nlohmann::json msg)
+{
+    bool isSession =
+        getIfFieldIsString(msg,"priority") &&
+        getIfFieldIsInteger(msg, "timeStamp") &&
+        getIfFieldIsInteger(msg, "playlistPos") &&
+        getIfFieldIsInteger(msg, "numberOfSongs") &&
+        getIfFieldIsInteger(msg, "playlistChkSum") &&
+        getIfFieldIsInteger(msg, "playState") &&
+        msg.size() == 6;
+    bool isTrack =
+        getIfFieldIsString(msg, "track") &&
+        getIfFieldIsString(msg, "hash") &&
+        getIfFieldIsString(msg, "url") &&
+        msg.size() == 3;
+    bool isOk =
+        getIfFieldIsInteger(msg, "ok") &&
+        msg.size() == 1;
+    bool isAskSync =
+        getIfFieldIsString(msg, "askSync") &&
+        msg.size() == 1;
+    bool isAskPlaylist =
+        getIfFieldIsInteger(msg, "sendPlaylist") &&
+        msg.size() == 1;
+    if(isSession)
+        return messageType::SESSION;
+    if(isTrack)
+        return messageType::TRACK;
+    if(isOk)
+        return messageType::OK;
+    if(isAskPlaylist)
+        return messageType::ASKPLAYLIST;
+    if(isAskSync)
+        return messageType::ASKSYNC;
+
+    return messageType::INVALID;
+}
 /*int MusicSession::cleanUpConnections() //I just want the idea to be there for a bit.
 {
     int c = 0;
@@ -306,8 +414,47 @@ int MusicSession::interpret(std::string message, std::string id)
     }
     return c;
 }*/
+
+bool MusicSession::getIfFieldIsInteger(nlohmann::json msg, std::string field)
+{
+    if(msg.empty())
+    {
+        return false;
+    }
+    auto it = msg.find(field);
+    if(it == msg.end())
+    {
+        return false;
+    }
+    if(!msg.find(field).value().is_number_integer())
+    {
+        return false;
+    }
+    return true;
+}
+
+bool MusicSession::getIfFieldIsString(nlohmann::json msg, std::string field)
+{
+    if(msg.empty())
+    {
+        return false;
+    }
+    auto it = msg.find(field);
+    if(it == msg.end())
+    {
+        return false;
+    }
+    if(!msg.find(field).value().is_string())
+    {
+        return false;
+    }
+    return true;
+}
+
 MusicSession::~MusicSession()
 {
+    std::lock_guard<std::mutex>mtxdc(dcsMutex);     //this may be useless but I don't want to risk stuff.
+    std::lock_guard<std::mutex>mtxpc(pcsMutex);
     for (auto i : dcs)
     {
         i.second->close();
