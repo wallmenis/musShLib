@@ -7,6 +7,7 @@
 
 MusicSession::MusicSession()
 {
+    delay = 100;
     wsConnected = false;
     connections = 0;
     generator.seed(rd());
@@ -24,6 +25,11 @@ MusicSession::MusicSession()
     playlist.clear();
 }
 
+std::shared_ptr<MusicSession> MusicSession::create()
+{
+    return std::make_shared<MusicSession>();
+}
+
 int MusicSession::addIceServer(std::string iceServer)
 {
     config.iceServers.emplace_back(iceServer);
@@ -34,10 +40,11 @@ int MusicSession::connectToSignalingServer(std::string signalingServer)
     std::stringstream tmp;
     std::string url;
     ws = std::make_shared<rtc::WebSocket>();
-    ws->onOpen([this](){wsConnected=true;});
-    ws->onClosed([this](){wsConnected=false;});
-    ws->onMessage([this](rtc::message_variant dat){
-        handleSignallingServer(dat);
+    auto self = shared_from_this();
+    ws->onOpen([self](){self->wsConnected=true;});
+    ws->onClosed([self](){self->wsConnected=false;});
+    ws->onMessage([self](rtc::message_variant dat){
+        self->handleSignallingServer(dat);
     });
     tmp << signalingServer << "/" << sessionId;
     url = tmp.str();
@@ -56,36 +63,42 @@ int MusicSession::connectToPeer(std::string peerId)
     pcsMutex.lock();
     auto pc = pcs[peerId] = std::make_shared<rtc::PeerConnection>(config);
     pcsMutex.unlock();
-    pc->onLocalDescription([this, peerId](rtc::Description desc){
+    auto self = shared_from_this();
+    pc->onLocalDescription([self, peerId](rtc::Description desc){
         nlohmann::json msg = {
             {"id",        peerId},
             {"type",      desc.typeString()},
             {"description", std::string(desc)}
         };
-        ws->send(msg.dump());
+        self->ws->send(msg.dump());
     });
 
-    pc->onLocalCandidate([this, peerId](rtc::Candidate candid){
+    pc->onLocalCandidate([self, peerId](rtc::Candidate candid){
         nlohmann::json msg = {
             {"id",        peerId},
             {"type",      "candidate"},
             {"candidate", std::string(candid)}//,
             //{"mid",       candid.mid()}           //commented out because we just use datachannels for now
         };
-        ws->send(msg.dump());
+        self->ws->send(msg.dump());
     });
 
 
     dcsMutex.lock();
     auto dc = dcs[peerId] = pc->createDataChannel("music");
     dcsMutex.unlock();
-    dc->onOpen([this](){connections++;});
-    dc->onClosed([this](){connections--;});
-    dc->onMessage([this,peerId](rtc::message_variant msg){
+    dc->onOpen([self](){self->connections++;});
+    dc->onClosed([self, peerId](){
+        self->dcsMutex.lock();
+        self->dcs.erase(peerId);
+        self->dcsMutex.unlock();
+        self->connections--;
+    });
+    dc->onMessage([self,peerId](rtc::message_variant msg){
         if(std::holds_alternative<std::string>(msg))
         {
             std::cout << std::get<std::string>(msg) << std::endl;
-            if( interpret(std::get<std::string>(msg),peerId))
+            if( self->interpret(std::get<std::string>(msg),peerId))
             {
                 std::cerr << "failed to interperate\n";
             }
@@ -95,9 +108,18 @@ int MusicSession::connectToPeer(std::string peerId)
     pc->onGatheringStateChange([](rtc::PeerConnection::GatheringState state){
         std::cout << "gathering state: " << state << std::endl;
     });
-
-    pc->onStateChange([](rtc::PeerConnection::State state){
+    pc->onStateChange([self, peerId](rtc::PeerConnection::State state){
         std::cout << "state: " << state << std::endl;
+        if (//false
+            rtc::PeerConnection::State::Closed == state ||
+            rtc::PeerConnection::State::Disconnected == state ||
+            rtc::PeerConnection::State::Failed == state
+            )
+        {
+            std::cout << peerId << " disconnected\n";
+            std::lock_guard<std::mutex> mtxpc(self->pcsMutex);
+            self->pcs.erase(peerId);
+        }
     });
 
     return 0;
@@ -186,35 +208,46 @@ void MusicSession::handleSignallingServer(rtc::message_variant data)
     }
     id=test_id->get<std::string>();
     std::shared_ptr<rtc::PeerConnection> pc;
+    auto self = shared_from_this();
     pcsMutex.lock();
     if (pcs.find(id) == pcs.end())
     {
         pc = pcs[id] = std::make_shared<rtc::PeerConnection>(config); // create if not existant yet
         pcsMutex.unlock();
-        pc->onLocalDescription([this, id](rtc::Description desc){
+        pc->onLocalDescription([self, id](rtc::Description desc){
             nlohmann::json msg = {
                 {"id",        id},
                 {"type",      desc.typeString()},
                 {"description", std::string(desc)}
             };
-            ws->send(msg.dump());
+            self->ws->send(msg.dump());
         });
 
-        pc->onLocalCandidate([this, id](rtc::Candidate candid){
+        pc->onLocalCandidate([self, id](rtc::Candidate candid){
             nlohmann::json msg = {
                 {"id",        id},
                 {"type",      "candidate"},
                 {"candidate", std::string(candid)}//,
                 //{"mid",       candid.mid()}
             };
-            ws->send(msg.dump());
+            self->ws->send(msg.dump());
         });
 
         pc->onGatheringStateChange([](rtc::PeerConnection::GatheringState state){
             std::cout << "gathering state: " << state << std::endl;
         });
-        pc->onStateChange([](rtc::PeerConnection::State state){
+        pc->onStateChange([self, id](rtc::PeerConnection::State state){
             std::cout << "state: " << state << std::endl;
+            if (//false
+                rtc::PeerConnection::State::Closed == state ||
+                rtc::PeerConnection::State::Disconnected == state ||
+                rtc::PeerConnection::State::Failed == state
+                )
+            {
+                std::cout << id << " disconnected\n";
+                std::lock_guard<std::mutex> mtxpc(self->pcsMutex);
+                self->pcs.erase(id);
+            }
         });
     }
     else
@@ -225,19 +258,24 @@ void MusicSession::handleSignallingServer(rtc::message_variant data)
 
 
 
-    pc->onDataChannel([this,id](std::shared_ptr<rtc::DataChannel> dc){
+    pc->onDataChannel([self,id](std::shared_ptr<rtc::DataChannel> dc){
         //std::cout << "datachannel made!!!!!!!!!!!!!!!!!!!!" << std::endl;
-        dcsMutex.lock();
-        dcs[id] = dc;
-        dcsMutex.unlock();
-        dc->onOpen([this](){connections++;});
-        dc->onClosed([this](){connections--;});
-        dc->onMessage([this,id](rtc::message_variant msg){
+        self->dcsMutex.lock();
+        self->dcs[id] = dc;
+        self->dcsMutex.unlock();
+        dc->onOpen([self](){self->connections++;});
+        dc->onClosed([self,id](){
+            self->connections--;
+            self->dcsMutex.lock();
+            self->dcs.erase(id);
+            self->dcsMutex.unlock();
+        });
+        dc->onMessage([self,id](rtc::message_variant msg){
             if(std::holds_alternative<std::string>(msg))    // May use dcs[id] inside instead and pass the ID. I find it cleaner that way instead of weak pointers.
             {
                 std::cout << std::get<std::string>(msg) << std::endl;
 
-                if( interpret(std::get<std::string>(msg),id))
+                if( self->interpret(std::get<std::string>(msg),id))
                 {
                     std::cerr << "failed to interperate\n";
                 }
@@ -270,9 +308,13 @@ void MusicSession::handleSignallingServer(rtc::message_variant data)
 }
 int MusicSession::addTrack(nlohmann::json track)
 {
-    std::lock_guard<std::mutex> mtxpl(playListMutex);
+    playListMutex.lock();
     playlist.emplace_back(track);
-    return 0;
+    playListMutex.unlock();
+    std::lock_guard<std::mutex> mtxsc(sessionMutex);
+    session["playlistChkSum"] = getPlaylistHash();
+    std::lock_guard<std::mutex> mtxpl(playListMutex);   //it lives until addTrack dies;
+    return playlist.size();
 }
 int MusicSession::setSession(nlohmann::json sesh)
 {
@@ -306,7 +348,7 @@ int MusicSession::assertState(nlohmann::json msg)
     {
         i.second->send(toSend.dump());
     }
-    return 0;
+    return dcs.size();
 }
 int MusicSession::getNumberOfConnections()
 {
@@ -318,7 +360,15 @@ bool MusicSession::isConnectedToSignallingServer()
 }
 bool MusicSession::isSafeToSend()
 {
-    return getNumberOfConnections() > 0 && isConnectedToSignallingServer();
+    return getNumberOfConnections() > 0 || isConnectedToSignallingServer();
+}
+int MusicSession::updateTime(int time)
+{
+    int oldTime = 0;
+    std::lock_guard<std::mutex> mtxsc(sessionMutex);
+    oldTime = session["timeStamp"];
+    session["timeStamp"] = time;
+    return oldTime;
 }
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 int MusicSession::interpret(std::string message, std::string id)
@@ -350,12 +400,15 @@ int MusicSession::interpret(std::string message, std::string id)
     MusicSession::messageType type = identify(msg);
     int phash = getPlaylistHash();
     int pnum = getPlaylist().size();
+
+    std::cout << type << std::endl;
+
     if(type == messageType::SESSION)
     {
         auto sesh = getPeerSession();
         if(msg["priority"]==getSessionId())
             dc->send(sesh.dump());
-        else if(!onTime(msg,10))
+        else if(!onTime(msg,delay))
             setSession(msg);
         if (phash != msg["playlistChkSum"] || pnum != msg["numberOfSongs"])
         {
@@ -439,32 +492,6 @@ MusicSession::messageType MusicSession::identify(nlohmann::json msg)
 
     return messageType::INVALID;
 }
-/*int MusicSession::cleanUpConnections() //I just want the idea to be there for a bit.
-{
-    int c = 0;
-    int i = 0;
-    for (dcs.count())
-    {
-        if(i.second->isClosed())
-        {
-            c+=dcs.erase(i.first);
-        }
-    }
-    for (auto i : pcs)
-    {
-        i.second->onStateChange([i,this](rtc::PeerConnection::State state){
-            if(
-                state == rtc::PeerConnection::State::Closed ||
-                state == rtc::PeerConnection::State::Disconnected ||
-                state == rtc::PeerConnection::State::Failed
-                )
-            {
-                pcs.erase(i.first);
-            }
-        });
-    }
-    return c;
-}*/
 
 bool MusicSession::getIfFieldIsInteger(nlohmann::json msg, std::string field)
 {

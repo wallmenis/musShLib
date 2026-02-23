@@ -18,9 +18,10 @@
 #include <random>
 
 
-class MusicSession{
+class MusicSession : public std::enable_shared_from_this<MusicSession>{
 public:
     MusicSession();
+    static std::shared_ptr<MusicSession> create();
     int addIceServer(std::string iceServer);
     int connectToSignalingServer(std::string signalingServer);
     int connectToPeer(std::string peerId);
@@ -35,6 +36,9 @@ public:
     int getNumberOfConnections();
     bool isConnectedToSignallingServer();
     bool isSafeToSend();
+    int updateTime(int time);
+
+    int delay;
 
     enum playState{
         PLAYING,
