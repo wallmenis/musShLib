@@ -89,10 +89,9 @@ int MusicSession::connectToPeer(std::string peerId)
     dcsMutex.unlock();
     dc->onOpen([self](){self->connections++;});
     dc->onClosed([self, peerId](){
-        //self->dcsMutex.lock();
-        //self->dcs.erase(peerId);
-        //self->dcsMutex.unlock();
         self->connections--;
+        //std::lock_guard<std::mutex> mtxdc(self->dcsMutex);
+        //self->dcs.erase(peerId);
     });
     dc->onMessage([self,peerId](rtc::message_variant msg){
         if(std::holds_alternative<std::string>(msg))
@@ -266,9 +265,8 @@ void MusicSession::handleSignallingServer(rtc::message_variant data)
         dc->onOpen([self](){self->connections++;});
         dc->onClosed([self,id](){
             self->connections--;
-            //self->dcsMutex.lock();
+            //std::lock_guard<std::mutex> mtxdc(self->dcsMutex);
             //self->dcs.erase(id);
-            //self->dcsMutex.unlock();
         });
         dc->onMessage([self,id](rtc::message_variant msg){
             if(std::holds_alternative<std::string>(msg))    // May use dcs[id] inside instead and pass the ID. I find it cleaner that way instead of weak pointers.
@@ -309,12 +307,52 @@ void MusicSession::handleSignallingServer(rtc::message_variant data)
 int MusicSession::addTrack(nlohmann::json track)
 {
     playListMutex.lock();
-    playlist.emplace_back(track);
+    auto it = playlist.end();
+    playListMutex.unlock();
+    return addTrackAt(track,it);
+}
+int MusicSession::addTrackFront(nlohmann::json track)
+{
+    playListMutex.lock();
+    auto it = playlist.begin();
+    playListMutex.unlock();
+    return addTrackAt(track,it);
+}
+int MusicSession::addTrackAt(nlohmann::json track,std::vector<nlohmann::json>::const_iterator pos)
+{
+    playListMutex.lock();
+    playlist.emplace(pos,track);
     playListMutex.unlock();
     std::lock_guard<std::mutex> mtxsc(sessionMutex);
-    session["playlistChkSum"] = getPlaylistHash();
+    session["playlistChkSum"] = getPlaylistHash();      //we don't want to double lock... I wish there was a more elegant way to do it.
     std::lock_guard<std::mutex> mtxpl(playListMutex);   //it lives until addTrack dies;
+    session["numberOfSongs"] = playlist.size();
     return playlist.size();
+}
+int MusicSession::removeTrackAt(std::vector<nlohmann::json>::const_iterator pos)
+{
+    playListMutex.lock();
+    playlist.erase(pos);
+    playListMutex.unlock();
+    std::lock_guard<std::mutex> mtxsc(sessionMutex);
+    session["playlistChkSum"] = getPlaylistHash();      //we don't want to double lock... I wish there was a more elegant way to do it.
+    std::lock_guard<std::mutex> mtxpl(playListMutex);   //it lives until addTrack dies;
+    session["numberOfSongs"] = playlist.size();
+    return playlist.size();
+}
+int MusicSession::removeTrackBack()
+{
+    playListMutex.lock();
+    auto it = playlist.end();
+    playListMutex.unlock();
+    return removeTrackAt(it);
+}
+int MusicSession::removeTrackFront()
+{
+    playListMutex.lock();
+    auto it = playlist.begin();
+    playListMutex.unlock();
+    return removeTrackAt(it);
 }
 int MusicSession::setSession(nlohmann::json sesh)
 {
@@ -360,7 +398,7 @@ bool MusicSession::isConnectedToSignallingServer()
 }
 bool MusicSession::isSafeToSend()
 {
-    return getNumberOfConnections() > 0 || isConnectedToSignallingServer();
+    return getNumberOfConnections() > 0;
 }
 int MusicSession::updateTime(int time)
 {
@@ -504,7 +542,7 @@ bool MusicSession::getIfFieldIsInteger(nlohmann::json msg, std::string field)
     {
         return false;
     }
-    if(!msg.find(field).value().is_number_integer())
+    if(!it.value().is_number_integer())
     {
         return false;
     }
@@ -522,7 +560,7 @@ bool MusicSession::getIfFieldIsString(nlohmann::json msg, std::string field)
     {
         return false;
     }
-    if(!msg.find(field).value().is_string())
+    if(!it.value().is_string())
     {
         return false;
     }
