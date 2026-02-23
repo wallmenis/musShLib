@@ -89,9 +89,9 @@ int MusicSession::connectToPeer(std::string peerId)
     dcsMutex.unlock();
     dc->onOpen([self](){self->connections++;});
     dc->onClosed([self, peerId](){
-        self->dcsMutex.lock();
-        self->dcs.erase(peerId);
-        self->dcsMutex.unlock();
+        //self->dcsMutex.lock();
+        //self->dcs.erase(peerId);
+        //self->dcsMutex.unlock();
         self->connections--;
     });
     dc->onMessage([self,peerId](rtc::message_variant msg){
@@ -110,10 +110,10 @@ int MusicSession::connectToPeer(std::string peerId)
     });
     pc->onStateChange([self, peerId](rtc::PeerConnection::State state){
         std::cout << "state: " << state << std::endl;
-        if (//false
-            rtc::PeerConnection::State::Closed == state ||
-            rtc::PeerConnection::State::Disconnected == state ||
-            rtc::PeerConnection::State::Failed == state
+        if (false
+            //rtc::PeerConnection::State::Closed == state ||
+            //rtc::PeerConnection::State::Disconnected == state ||
+            //rtc::PeerConnection::State::Failed == state
             )
         {
             std::cout << peerId << " disconnected\n";
@@ -238,10 +238,10 @@ void MusicSession::handleSignallingServer(rtc::message_variant data)
         });
         pc->onStateChange([self, id](rtc::PeerConnection::State state){
             std::cout << "state: " << state << std::endl;
-            if (//false
-                rtc::PeerConnection::State::Closed == state ||
-                rtc::PeerConnection::State::Disconnected == state ||
-                rtc::PeerConnection::State::Failed == state
+            if (false
+                //rtc::PeerConnection::State::Closed == state ||
+                //rtc::PeerConnection::State::Disconnected == state ||
+                //rtc::PeerConnection::State::Failed == state
                 )
             {
                 std::cout << id << " disconnected\n";
@@ -266,9 +266,9 @@ void MusicSession::handleSignallingServer(rtc::message_variant data)
         dc->onOpen([self](){self->connections++;});
         dc->onClosed([self,id](){
             self->connections--;
-            self->dcsMutex.lock();
-            self->dcs.erase(id);
-            self->dcsMutex.unlock();
+            //self->dcsMutex.lock();
+            //self->dcs.erase(id);
+            //self->dcsMutex.unlock();
         });
         dc->onMessage([self,id](rtc::message_variant msg){
             if(std::holds_alternative<std::string>(msg))    // May use dcs[id] inside instead and pass the ID. I find it cleaner that way instead of weak pointers.
