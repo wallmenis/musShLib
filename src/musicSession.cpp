@@ -33,7 +33,7 @@ std::shared_ptr<MusicSession> MusicSession::create()
 int MusicSession::addIceServer(std::string iceServer)
 {
     config.iceServers.emplace_back(iceServer);
-    return 0;
+    return config.iceServers.size();
 }
 int MusicSession::connectToSignalingServer(std::string signalingServer)
 {
