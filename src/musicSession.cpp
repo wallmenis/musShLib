@@ -350,7 +350,7 @@ int MusicSession::removeTrackBack()
 int MusicSession::removeTrackFront()
 {
     playListMutex.lock();
-    auto it = playlist.begin();
+    auto it = 0;
     playListMutex.unlock();
     return removeTrackAt(it);
 }
