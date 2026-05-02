@@ -32,8 +32,8 @@ public:
     int getPlaylistHash();
     int addTrack(nlohmann::json track);
     int addTrackFront(nlohmann::json track);
-    int addTrackAt(nlohmann::json track,std::vector<nlohmann::json>::const_iterator pos);
-    int removeTrackAt(std::vector<nlohmann::json>::const_iterator pos);
+    int addTrackAt(nlohmann::json track,int pos);
+    int removeTrackAt(int pos);
     int removeTrackBack();
     int removeTrackFront();
     int setSession(nlohmann::json sesh);

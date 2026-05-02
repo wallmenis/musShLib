@@ -307,21 +307,21 @@ void MusicSession::handleSignallingServer(rtc::message_variant data)
 int MusicSession::addTrack(nlohmann::json track)
 {
     playListMutex.lock();
-    auto it = playlist.end();
+    auto it = playlist.size();
     playListMutex.unlock();
     return addTrackAt(track,it);
 }
 int MusicSession::addTrackFront(nlohmann::json track)
 {
     playListMutex.lock();
-    auto it = playlist.begin();
+    auto it = 0;
     playListMutex.unlock();
     return addTrackAt(track,it);
 }
-int MusicSession::addTrackAt(nlohmann::json track,std::vector<nlohmann::json>::const_iterator pos)
+int MusicSession::addTrackAt(nlohmann::json track,int pos)
 {
     playListMutex.lock();
-    playlist.emplace(pos,track);
+    playlist.insert(playlist.begin() + pos, track);
     playListMutex.unlock();
     std::lock_guard<std::mutex> mtxsc(sessionMutex);
     session["playlistChkSum"] = getPlaylistHash();      //we don't want to double lock... I wish there was a more elegant way to do it.
@@ -329,10 +329,10 @@ int MusicSession::addTrackAt(nlohmann::json track,std::vector<nlohmann::json>::c
     session["numberOfSongs"] = playlist.size();
     return playlist.size();
 }
-int MusicSession::removeTrackAt(std::vector<nlohmann::json>::const_iterator pos)
+int MusicSession::removeTrackAt(int pos)
 {
     playListMutex.lock();
-    playlist.erase(pos);
+    playlist.erase(playlist.begin() + pos);
     playListMutex.unlock();
     std::lock_guard<std::mutex> mtxsc(sessionMutex);
     session["playlistChkSum"] = getPlaylistHash();      //we don't want to double lock... I wish there was a more elegant way to do it.
@@ -343,7 +343,7 @@ int MusicSession::removeTrackAt(std::vector<nlohmann::json>::const_iterator pos)
 int MusicSession::removeTrackBack()
 {
     playListMutex.lock();
-    auto it = playlist.end();
+    auto it = playlist.size();
     playListMutex.unlock();
     return removeTrackAt(it);
 }
