@@ -343,7 +343,7 @@ int MusicSession::removeTrackAt(int pos)
 int MusicSession::removeTrackBack()
 {
     playListMutex.lock();
-    auto it = playlist.size();
+    auto it = playlist.size()-1;
     playListMutex.unlock();
     return removeTrackAt(it);
 }
