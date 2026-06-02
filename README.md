@@ -23,9 +23,6 @@ Personally, I use Fedora linux and used
 sudo dnf install libdatachannel-devel json-devel
 ```
 
-If you want, you may help with the project by showing me how to compile with those
-libraries from source.
-
 ## Documentation:
 - `static std::shared_ptr<MusicSession> create();`
 Called like `MusicSession::create()`, this is a factory of music sessions.
