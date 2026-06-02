@@ -80,12 +80,12 @@ would want that, I don't know. Feel free to hack together different stuff : )
 It is used internally for the calculation.
 - `int addTrack(nlohmann::json track);`
 `int addTrackFront(nlohmann::json track);`
-`int addTrackAt(nlohmann::json track,std::vector<nlohmann::json>::const_iterator pos);`
+`int addTrackAt(nlohmann::json track,int pos);`
 These methods are used to add tracks. The format for a track is the same as in
 `std::vector<nlohmann::json> getPlaylist();`. The position in the vector where the
 track is placed is implied by the name of the function. That is except of `addTrack`
-where it is just added at the last position. We also use iterators for ease of placement.
-- `int removeTrackAt(std::vector<nlohmann::json>::const_iterator pos);` 
+where it is just added at the last position.
+- `int removeTrackAt(int pos);` 
 `int removeTrackBack();`
 `int removeTrackFront();`
 Just like in the `addTrack` commands we just saw, the `removeTrack` commands remove
